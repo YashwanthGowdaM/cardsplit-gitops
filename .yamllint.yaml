@@ -1,0 +1,7 @@
+extends: relaxed
+rules:
+  line-length: disable
+  document-start: disable
+  colons: disable
+  commas: disable
+  empty-lines: {max: 1}
