@@ -1,0 +1,7 @@
+# never commit plain secrets or local tooling output
+*.secret.yaml
+.env
+*.kubeconfig
+kubeconfig*
+/gitops/
+.DS_Store
