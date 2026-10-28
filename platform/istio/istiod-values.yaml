@@ -1,0 +1,23 @@
+# istio/istiod chart: the control plane
+pilot:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits:   {cpu: "1", memory: 1Gi}
+  nodeSelector:
+    workload: platform
+global:
+  proxy:
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits:   {cpu: 500m, memory: 256Mi}
+meshConfig:
+  accessLogFile: /dev/stdout            # Envoy access logs -> container logs -> Fluent Bit -> Splunk
+  accessLogEncoding: JSON
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+    tracing: {}
+  extensionProviders:
+    - name: jaeger-otel                 # referenced by the Telemetry resource in istio/config
+      opentelemetry:
+        service: jaeger-collector.observability.svc.cluster.local
+        port: 4317

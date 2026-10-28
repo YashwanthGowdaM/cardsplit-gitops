@@ -1,0 +1,47 @@
+// =============================================================================
+// Promote the image tags currently running in DEV to PROD (manual approval).
+// Create a Jenkins "Pipeline" job (not multibranch) pointing at the GitOps repo,
+// Script Path = ci/gitops-repo/Jenkinsfile.promote
+// =============================================================================
+pipeline {
+  agent { label 'docker' }
+  options { timestamps(); disableConcurrentBuilds(); timeout(time: 30, unit: 'MINUTES') }
+  environment {
+    GITOPS_REPO   = '__GIT_REPO_HOST_PATH__'
+    GITOPS_BRANCH = 'main'
+  }
+  stages {
+    stage('Show what will be promoted') {
+      steps {
+        git url: "https://${GITOPS_REPO}", branch: "${GITOPS_BRANCH}", credentialsId: 'github-gitops-pat'
+        sh '''
+          echo "== DEV  =="; grep -A1 "name: cardsplit/" apps/cardsplit/overlays/dev/kustomization.yaml
+          echo "== PROD =="; grep -A1 "name: cardsplit/" apps/cardsplit/overlays/prod/kustomization.yaml
+        '''
+      }
+    }
+    stage('Approval') {
+      steps { input message: 'Promote the DEV image tags to PROD?', ok: 'Promote', submitter: 'release-managers,admin' }
+    }
+    stage('Promote') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-gitops-pat',
+                                          usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+          sh '''
+            set -e
+            for s in frontend backend database; do
+              # read "newName:newTag" of the dev overlay and apply it to prod
+              IMG=$(yq ".images[] | select(.name == \\"cardsplit/$s\\") | .newName + \\":\\" + .newTag" apps/cardsplit/overlays/dev/kustomization.yaml)
+              (cd apps/cardsplit/overlays/prod && kustomize edit set image cardsplit/$s=$IMG)
+            done
+            git config user.name "jenkins-ci"; git config user.email "jenkins-ci@cardsplit.local"
+            git add -A
+            git diff --cached --quiet && { echo "Prod already up to date"; exit 0; }
+            git commit -m "release(prod): promote dev image tags (build ${BUILD_NUMBER})"
+            git push https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO} HEAD:${GITOPS_BRANCH}
+          '''
+        }
+      }
+    }
+  }
+}

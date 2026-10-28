@@ -1,0 +1,12 @@
+# Mesh-wide tracing: every sidecar sends spans to Jaeger (OTLP/gRPC).
+# 100% sampling is fine for a small app; lower it for real traffic.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+    - providers:
+        - name: jaeger-otel
+      randomSamplingPercentage: 100.0

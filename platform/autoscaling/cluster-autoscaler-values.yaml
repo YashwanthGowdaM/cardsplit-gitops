@@ -1,0 +1,21 @@
+# "HNA" = Horizontal NODE Autoscaler: adds/removes EC2 nodes when pods are
+# Pending (HPA scaled out) or nodes are under-used. Node groups are discovered
+# by the tags k8s.io/cluster-autoscaler/enabled + /<cluster-name> (set in eksctl).
+# TIP: the image tag should match your Kubernetes minor (1.36.x); set image.tag if you want to pin it.
+autoDiscovery:
+  clusterName: __CLUSTER_NAME__
+awsRegion: __AWS_REGION__
+rbac:
+  serviceAccount:
+    create: false                       # created by eksctl with the IRSA role
+    name: cluster-autoscaler
+extraArgs:
+  balance-similar-node-groups: true
+  skip-nodes-with-system-pods: false
+  expander: least-waste
+  scale-down-unneeded-time: 10m
+resources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits:   {cpu: 200m, memory: 300Mi}
+nodeSelector:
+  workload: platform

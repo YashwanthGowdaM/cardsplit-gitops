@@ -1,0 +1,86 @@
+# =============================================================================
+# EKS cluster for CardSplit  ->  eksctl create cluster -f eksctl-cluster.yaml
+# Node groups drive the scheduling demos:
+#   ng-app      workload=app         app pods (frontend, backend)
+#   ng-data     workload=data        TAINT dedicated=data:NoSchedule, single AZ (EBS volume is AZ-bound)
+#   ng-platform workload=platform    observability + GitOps tooling (Prometheus, Splunk, ...)
+# Replace the placeholder tokens (double-underscore names) with  scripts/configure.sh
+# =============================================================================
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: __CLUSTER_NAME__
+  region: __AWS_REGION__
+  version: "1.36"
+  tags:
+    project: cardsplit
+    managed-by: eksctl
+
+availabilityZones: ["__AWS_REGION__a", "__AWS_REGION__b", "__AWS_REGION__c"]
+
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+
+iam:
+  withOIDC: true                      # enables IRSA (IAM Roles for Service Accounts)
+  serviceAccounts:
+    - metadata: {name: aws-load-balancer-controller, namespace: kube-system}
+      wellKnownPolicies: {awsLoadBalancerController: true}
+    - metadata: {name: cluster-autoscaler, namespace: kube-system}
+      wellKnownPolicies: {autoScaler: true}
+
+addons:
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver          # provides the ebs.csi.aws.com StorageClass provisioner
+    wellKnownPolicies: {ebsCSIController: true}
+
+managedNodeGroups:
+  - name: ng-app
+    instanceType: t3.medium
+    minSize: 2
+    desiredCapacity: 2
+    maxSize: 6
+    volumeSize: 30
+    volumeType: gp3
+    volumeEncrypted: true
+    labels: {workload: app}
+    iam:
+      withAddonPolicies: {autoScaler: true}
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/__CLUSTER_NAME__: owned
+
+  - name: ng-data
+    instanceType: t3.medium
+    availabilityZones: ["__AWS_REGION__a"]     # single AZ: the EBS data volume cannot move between AZs
+    minSize: 1
+    desiredCapacity: 1
+    maxSize: 2
+    volumeSize: 30
+    volumeType: gp3
+    volumeEncrypted: true
+    labels: {workload: data}
+    taints:
+      - {key: dedicated, value: data, effect: NoSchedule}
+    iam:
+      withAddonPolicies: {autoScaler: true}
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/__CLUSTER_NAME__: owned
+
+  - name: ng-platform
+    instanceType: t3.xlarge
+    minSize: 2
+    desiredCapacity: 2
+    maxSize: 3
+    volumeSize: 50
+    volumeType: gp3
+    volumeEncrypted: true
+    labels: {workload: platform}
+    iam:
+      withAddonPolicies: {autoScaler: true}
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/__CLUSTER_NAME__: owned

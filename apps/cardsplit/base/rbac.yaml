@@ -1,0 +1,50 @@
+# Namespaced RBAC: who may do what inside the app namespace.
+# Groups are mapped from IAM roles via EKS access entries (see docs/02).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: cardsplit-viewer}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, endpoints, configmaps, persistentvolumeclaims, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: cardsplit-developer}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, endpoints, configmaps, persistentvolumeclaims, events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward]
+    verbs: [create]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, patch]      # patch = "kubectl rollout restart"
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  # NOTE: no access to Secrets for developers on purpose.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: cardsplit-viewers}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: cardsplit-viewer}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: cardsplit-viewers}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: cardsplit-developers}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: cardsplit-developer}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: cardsplit-developers}

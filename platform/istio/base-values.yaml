@@ -1,0 +1,2 @@
+# istio/base chart: CRDs + cluster roles
+defaultRevision: default

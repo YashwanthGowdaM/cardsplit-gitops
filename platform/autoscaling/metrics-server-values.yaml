@@ -1,0 +1,6 @@
+# Needed by every HPA.
+replicas: 2
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits:   {cpu: 200m, memory: 128Mi}
+podDisruptionBudget: {enabled: true, minAvailable: 1}

@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cardsplit
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-10"}
+spec:
+  description: CardSplit application (dev + prod). Restricted to its own namespaces.
+  sourceRepos:
+    - __GIT_REPO_URL__
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: "cardsplit-*"}
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}          # the only cluster-scoped kind the app may create
+  roles:
+    - name: deployer
+      description: May view and sync CardSplit applications
+      policies:
+        - p, proj:cardsplit:deployer, applications, get,  cardsplit/*, allow
+        - p, proj:cardsplit:deployer, applications, sync, cardsplit/*, allow
+      groups: [cardsplit-deployers]

@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace is set by each overlay. Image names below are placeholders that the
+# overlays rewrite to the ECR repository + tag (Jenkins updates the tags).
+resources:
+  - serviceaccounts.yaml
+  - rbac.yaml
+  - limitrange-quota.yaml
+  - backend.yaml
+  - frontend.yaml
+  - database.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - ingress.yaml
+  - istio.yaml
+
+# ConfigMaps (name gets a content hash -> a config change triggers a rollout)
+configMapGenerator:
+  - name: backend-config
+    literals:
+      - PORT=5000
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=cardsplit
+      - CORS_ORIGIN=*
+  - name: database-config
+    literals:
+      - POSTGRES_DB=cardsplit
+  - name: frontend-nginx
+    files:
+      - default.conf.template=nginx.conf.template

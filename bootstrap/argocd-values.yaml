@@ -1,0 +1,53 @@
+# =============================================================================
+# ArgoCD (argo/argo-cd Helm chart) - installed ONCE by hand (docs/05), then it
+# manages everything else from Git.
+# =============================================================================
+global:
+  nodeSelector:
+    workload: platform
+configs:
+  cm:
+    timeout.reconciliation: 60s        # poll Git every 60s (add a GitHub webhook for instant sync)
+    exec.enabled: "false"
+    application.resourceTrackingMethod: annotation
+  params:
+    server.insecure: false             # keep TLS on the LB (self-signed cert -> browser warning)
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      # role:deployer may view + sync CardSplit apps (not delete / edit)
+      p, role:deployer, applications, get,  cardsplit/*, allow
+      p, role:deployer, applications, sync, cardsplit/*, allow
+      p, role:deployer, applications, action/*, cardsplit/*, allow
+      # map SSO / IAM groups (optional) -> roles
+      g, cardsplit-deployers, role:deployer
+      g, platform-admins, role:admin
+    scopes: "[groups]"
+server:
+  replicas: 1
+  service:
+    type: LoadBalancer                 # internet-facing NLB
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: external
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    loadBalancerSourceRanges: ["__ADMIN_CIDR__"]
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}
+controller:
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits:   {cpu: "1", memory: 1Gi}
+repoServer:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits:   {cpu: "1", memory: 1Gi}
+applicationSet:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits:   {cpu: 200m, memory: 256Mi}
+redis:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits:   {cpu: 200m, memory: 128Mi}

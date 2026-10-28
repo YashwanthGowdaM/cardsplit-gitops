@@ -1,0 +1,112 @@
+# =============================================================================
+# Splunk Enterprise (single instance) - log search UI + HTTP Event Collector.
+# Fluent Bit -> splunk-hec:8088 ; you -> Splunk Web via an internet-facing NLB.
+# License: the image starts with the Splunk Enterprise trial (60 days), then the
+# Free tier (500 MB/day, no auth) unless you add a licence - see docs/06.
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: splunk
+  namespace: logging
+  labels: {app: splunk, app.kubernetes.io/part-of: logging}
+spec:
+  serviceName: splunk-headless
+  replicas: 1
+  updateStrategy: {type: RollingUpdate}
+  selector:
+    matchLabels: {app: splunk}
+  template:
+    metadata:
+      labels: {app: splunk, app.kubernetes.io/part-of: logging}
+    spec:
+      terminationGracePeriodSeconds: 120
+      nodeSelector: {workload: platform}
+      securityContext:
+        runAsUser: 41812            # "splunk" user in the official image
+        runAsGroup: 41812
+        fsGroup: 41812
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: splunk
+          image: splunk/splunk:9.4.3
+          ports:
+            - {name: web, containerPort: 8000}
+            - {name: hec, containerPort: 8088}
+            - {name: mgmt, containerPort: 8089}
+          env:
+            - {name: SPLUNK_START_ARGS, value: "--accept-license"}
+            - {name: SPLUNK_GENERAL_TERMS, value: "--accept-sgt-current-at-splunk-com"}
+            - name: SPLUNK_PASSWORD
+              valueFrom: {secretKeyRef: {name: splunk-secrets, key: SPLUNK_PASSWORD}}
+            - name: SPLUNK_HEC_TOKEN
+              valueFrom: {secretKeyRef: {name: splunk-secrets, key: HEC_TOKEN}}
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits:   {cpu: "2", memory: 4Gi}
+          # Splunk needs a few minutes on first start; the image ships its own health script.
+          startupProbe:
+            exec: {command: [/sbin/checkstate.sh]}
+            periodSeconds: 15
+            failureThreshold: 40
+            timeoutSeconds: 10
+          readinessProbe:
+            exec: {command: [/sbin/checkstate.sh]}
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: web}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: var, mountPath: /opt/splunk/var}
+  volumeClaimTemplates:
+    - metadata: {name: var}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: gp3-delete
+        resources: {requests: {storage: 50Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: splunk-headless
+  namespace: logging
+spec:
+  clusterIP: None
+  selector: {app: splunk}
+  ports:
+    - {name: web, port: 8000}
+---
+# Internal: Fluent Bit -> HEC
+apiVersion: v1
+kind: Service
+metadata:
+  name: splunk-hec
+  namespace: logging
+spec:
+  type: ClusterIP
+  selector: {app: splunk}
+  ports:
+    - {name: hec, port: 8088, targetPort: hec}
+---
+# Internet-facing: Splunk Web UI
+apiVersion: v1
+kind: Service
+metadata:
+  name: splunk-web
+  namespace: logging
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/load-balancer-source-ranges: "__ADMIN_CIDR__"
+spec:
+  type: LoadBalancer
+  selector: {app: splunk}
+  ports:
+    - {name: web, port: 8000, targetPort: web}

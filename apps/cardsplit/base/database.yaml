@@ -1,0 +1,179 @@
+# =============================================================================
+# DATABASE - PostgreSQL 16 (custom image with schema) as a StatefulSet
+# Covers: PVC (volumeClaimTemplates) + StorageClass, TAINT TOLERATION,
+#         NODE AFFINITY (data nodes), POD ANTI-AFFINITY vs app pods,
+#         probes, resources, update strategy, postgres-exporter sidecar.
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: database
+  labels:
+    app: database
+    app.kubernetes.io/name: database
+    app.kubernetes.io/component: db
+    app.kubernetes.io/part-of: cardsplit
+spec:
+  serviceName: database-headless
+  replicas: 1
+  revisionHistoryLimit: 5
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:      # never delete data when the StatefulSet is deleted/scaled
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+        app.kubernetes.io/name: database
+        app.kubernetes.io/component: db
+        app.kubernetes.io/part-of: cardsplit
+        version: v1
+      annotations:
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+        sidecar.istio.io/proxyCPU: 50m
+        sidecar.istio.io/proxyMemory: 128Mi
+        sidecar.istio.io/proxyCPULimit: 300m
+        sidecar.istio.io/proxyMemoryLimit: 256Mi
+        # Istio merges the exporter's metrics into the sidecar scrape endpoint (:15020)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: database
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70            # "postgres" user in postgres:16-alpine
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      # TAINT TOLERATION: data nodes carry dedicated=data:NoSchedule
+      tolerations:
+        - {key: dedicated, operator: Equal, value: data, effect: NoSchedule}
+      affinity:
+        # NODE AFFINITY: must run on the data node group
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: workload, operator: In, values: [data]}
+        # POD ANTI-AFFINITY (required): keep the database node free of web/API pods
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchExpressions:
+                  - {key: app, operator: In, values: [frontend, backend]}
+      containers:
+        - name: postgres
+          image: cardsplit/database:0.0.0      # replaced by overlay images:
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: database-config, key: POSTGRES_DB}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_PASSWORD}}
+            - name: PGDATA                  # sub-directory: EBS volumes contain lost+found
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits:   {cpu: "1", memory: 1Gi}
+          startupProbe:
+            exec:
+              command: [sh, -c, 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: [sh, -c, 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: dshm, mountPath: /dev/shm}
+        - name: postgres-exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+          ports:
+            - {name: metrics, containerPort: 9187}
+          env:
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: database-config, key: POSTGRES_DB}}
+            - name: DATA_SOURCE_URI
+              value: localhost:5432/$(POSTGRES_DB)?sslmode=disable
+            - name: DATA_SOURCE_USER
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_USER}}
+            - name: DATA_SOURCE_PASS
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_PASSWORD}}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits:   {cpu: 100m, memory: 96Mi}
+          readinessProbe:
+            httpGet: {path: /, port: metrics}
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: {path: /, port: metrics}
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: dshm
+          emptyDir: {medium: Memory, sizeLimit: 128Mi}
+  # PVC: one EBS gp3 volume per replica, created from the StorageClass below
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {app: database, app.kubernetes.io/part-of: cardsplit}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: gp3-retain
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+  labels: {app: database, app.kubernetes.io/part-of: cardsplit}
+spec:
+  type: ClusterIP                  # private: only the backend may talk to it (AuthorizationPolicy)
+  selector: {app: database}
+  ports:
+    - {name: tcp-postgres, port: 5432, targetPort: postgres, protocol: TCP}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: database-headless
+  labels: {app: database, app.kubernetes.io/part-of: cardsplit}
+spec:
+  clusterIP: None                  # governing service for the StatefulSet (stable pod DNS)
+  selector: {app: database}
+  ports:
+    - {name: tcp-postgres, port: 5432, targetPort: postgres, protocol: TCP}

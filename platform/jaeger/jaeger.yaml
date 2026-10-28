@@ -1,0 +1,79 @@
+# =============================================================================
+# Jaeger v2 (all-in-one, in-memory storage): receives OTLP spans from the Istio
+# sidecars and serves the trace UI. Traces are lost when the pod restarts; for
+# long-term storage switch the backend to OpenSearch/Elasticsearch (docs/07).
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: observability
+  labels: {app: jaeger, app.kubernetes.io/part-of: tracing}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: jaeger}
+  template:
+    metadata:
+      labels: {app: jaeger, app.kubernetes.io/part-of: tracing}
+    spec:
+      nodeSelector: {workload: platform}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: jaeger
+          image: jaegertracing/jaeger:2.10.0
+          ports:
+            - {name: ui, containerPort: 16686}
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: 500m, memory: 1Gi}
+          startupProbe:
+            tcpSocket: {port: ui}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            tcpSocket: {port: ui}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: ui}
+            periodSeconds: 20
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+# Internal: spans from Envoy sidecars (referenced in istiod meshConfig)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: observability
+spec:
+  type: ClusterIP
+  selector: {app: jaeger}
+  ports:
+    - {name: grpc-otlp, port: 4317, targetPort: otlp-grpc}
+    - {name: http-otlp, port: 4318, targetPort: otlp-http}
+---
+# Internet-facing: Jaeger UI (also used internally by Kiali and Grafana)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-query
+  namespace: observability
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/load-balancer-source-ranges: "__ADMIN_CIDR__"
+spec:
+  type: LoadBalancer
+  selector: {app: jaeger}
+  ports:
+    - {name: http-query, port: 16686, targetPort: ui}

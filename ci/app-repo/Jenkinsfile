@@ -1,0 +1,122 @@
+// =============================================================================
+// CardSplit CI  -  lives in the APP repository (CreditCardBillSplitter), root folder.
+//
+//   git push (app repo)  ->  Jenkins  ->  build 3 images  ->  push to AWS ECR
+//        ->  commit new image tags into the GitOps repo (overlays/dev)
+//        ->  ArgoCD notices the commit and rolls the new version out.
+//
+// Jenkins agent requirements : docker, aws cli v2, git, kustomize (or yq), (optional) trivy
+// Jenkins credentials needed : github-gitops-pat   (Username + PAT with write access to the GitOps repo)
+// AWS access                 : EC2 instance profile on the agent with ci/gitops-repo ECR policy
+//                              (clusters/eks-prod/iam/jenkins-ecr-policy.json) - no keys stored in Jenkins.
+// =============================================================================
+pipeline {
+  agent { label 'docker' }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    timeout(time: 45, unit: 'MINUTES')
+  }
+
+  environment {
+    AWS_REGION      = '__AWS_REGION__'
+    AWS_ACCOUNT_ID  = '__AWS_ACCOUNT_ID__'
+    ECR_REGISTRY    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    GITOPS_REPO     = '__GIT_REPO_HOST_PATH__'       // e.g. github.com/yourname/cardsplit-gitops.git  (no https://)
+    GITOPS_BRANCH   = 'main'
+    GITOPS_ENV      = 'dev'                          // overlay updated automatically; prod is promoted (Jenkinsfile.promote)
+    SERVICES        = 'frontend backend database'
+  }
+
+  stages {
+    stage('Prepare') {
+      steps {
+        script {
+          env.SHORT_SHA = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.SHORT_SHA}"      // unique + traceable (ECR tags are immutable)
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.IMAGE_TAG}"
+        }
+        sh 'docker version --format "{{.Server.Version}}" && aws --version'
+      }
+    }
+
+    stage('Build images') {
+      parallel {
+        stage('frontend') { steps { sh 'docker build -t ${ECR_REGISTRY}/cardsplit/frontend:${IMAGE_TAG} ./frontend' } }
+        stage('backend')  { steps { sh 'docker build -t ${ECR_REGISTRY}/cardsplit/backend:${IMAGE_TAG}  ./backend'  } }
+        stage('database') { steps { sh 'docker build -t ${ECR_REGISTRY}/cardsplit/database:${IMAGE_TAG} ./database' } }
+      }
+    }
+
+    stage('Scan images (Trivy)') {
+      steps {
+        sh '''
+          if command -v trivy >/dev/null 2>&1; then
+            for s in ${SERVICES}; do
+              trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed --no-progress \
+                ${ECR_REGISTRY}/cardsplit/$s:${IMAGE_TAG}
+            done
+          else
+            echo "trivy not installed on this agent - skipping vulnerability scan"
+          fi
+        '''
+      }
+    }
+
+    stage('Push to ECR') {
+      when { branch 'main' }
+      steps {
+        sh '''
+          aws ecr get-login-password --region ${AWS_REGION} | \
+            docker login --username AWS --password-stdin ${ECR_REGISTRY}
+          for s in ${SERVICES}; do
+            docker push ${ECR_REGISTRY}/cardsplit/$s:${IMAGE_TAG}
+          done
+        '''
+      }
+    }
+
+    stage('Update GitOps repo') {
+      when { branch 'main' }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-gitops-pat',
+                                          usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+          sh '''
+            set -e
+            rm -rf gitops && git clone --depth 1 --branch ${GITOPS_BRANCH} https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO} gitops
+            cd gitops/apps/cardsplit/overlays/${GITOPS_ENV}
+            for s in ${SERVICES}; do
+              kustomize edit set image cardsplit/$s=${ECR_REGISTRY}/cardsplit/$s:${IMAGE_TAG}
+            done
+            cd ../../../..
+            git config user.name  "jenkins-ci"
+            git config user.email "jenkins-ci@cardsplit.local"
+            git add -A
+            if git diff --cached --quiet; then echo "No change to commit"; exit 0; fi
+            git commit -m "ci(${GITOPS_ENV}): deploy cardsplit ${IMAGE_TAG}" \
+                       -m "App commit: ${GIT_COMMIT}" -m "Jenkins build: ${BUILD_URL}"
+            # retry in case another build pushed in the meantime
+            for i in 1 2 3; do
+              git push origin HEAD:${GITOPS_BRANCH} && break
+              git pull --rebase origin ${GITOPS_BRANCH}
+            done
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh '''
+        for s in ${SERVICES}; do docker rmi ${ECR_REGISTRY}/cardsplit/$s:${IMAGE_TAG} || true; done
+        docker image prune -f || true
+      '''
+      cleanWs()
+    }
+    success { echo "Images ${env.IMAGE_TAG} pushed and GitOps repo updated - ArgoCD will now sync cardsplit-${env.GITOPS_ENV}." }
+    failure { echo 'Build failed - nothing was deployed.' }
+  }
+}

@@ -1,0 +1,19 @@
+# Keep the service up while nodes are drained / upgraded / scaled down.
+# (No PDB for the single-replica database: it would block node drains forever.)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: backend}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: frontend}

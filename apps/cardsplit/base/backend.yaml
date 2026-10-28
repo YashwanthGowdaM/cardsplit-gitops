@@ -1,0 +1,141 @@
+# =============================================================================
+# BACKEND - Node/Express API (port 5000)
+# Covers: resources, probes, rolling strategy, node affinity (required),
+#         pod anti-affinity (spread), pod affinity (same zone as database),
+#         topology spread, hardened securityContext, ConfigMap + Secret wiring.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: cardsplit
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 10
+  progressDeadlineSeconds: 300
+  strategy:                       # zero-downtime rolling update
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: cardsplit
+        version: v1
+      annotations:
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+        sidecar.istio.io/proxyCPU: 50m
+        sidecar.istio.io/proxyMemory: 128Mi
+        sidecar.istio.io/proxyCPULimit: 500m
+        sidecar.istio.io/proxyMemoryLimit: 256Mi
+    spec:
+      serviceAccountName: backend
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        # NODE AFFINITY (required): only schedule on nodes labelled workload=app
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: workload, operator: In, values: [app]}
+        # POD ANTI-AFFINITY (preferred): spread replicas over different nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: backend}
+        # POD AFFINITY (preferred): run in the same AZ as the database (lower latency / no cross-AZ cost)
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels: {app: database}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: backend}
+      containers:
+        - name: backend
+          image: cardsplit/backend:0.0.0       # replaced by overlay images: (ECR URL + tag)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 5000}
+          envFrom:
+            - configMapRef: {name: backend-config}
+          env:
+            - name: DB_USER
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_USER}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: DB_PASSWORD}}
+            - name: ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: cardsplit-secrets, key: ADMIN_PASSWORD}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits:   {cpu: 500m, memory: 384Mi}
+          # PROBES -----------------------------------------------------------
+          # startup : gives the app up to 150s to reach the database
+          startupProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 3
+          # readiness: /api/health checks the DB -> pod leaves the Service when DB is unreachable
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # liveness : "/" does NOT touch the DB, so a DB outage never restarts healthy pods
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: {command: ["sleep", "5"]}   # let endpoints/mesh drain before SIGTERM
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels: {app: backend, app.kubernetes.io/part-of: cardsplit}
+spec:
+  type: ClusterIP                  # private: only reachable from inside the mesh
+  selector: {app: backend}
+  ports:
+    - {name: http, port: 5000, targetPort: http, protocol: TCP}

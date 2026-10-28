@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cardsplit-prod
+  labels:
+    istio-injection: enabled          # auto-inject Envoy sidecars (mesh, mTLS, tracing, Kiali)
+    environment: prod
+    app.kubernetes.io/part-of: cardsplit

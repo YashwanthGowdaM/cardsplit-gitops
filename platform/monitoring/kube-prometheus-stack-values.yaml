@@ -1,0 +1,121 @@
+# =============================================================================
+# Prometheus + Alertmanager + Grafana (kube-prometheus-stack)
+# =============================================================================
+fullnameOverride: kube-prometheus-stack     # stable service names: kube-prometheus-stack-prometheus, ...
+
+# EKS hides the control-plane components -> do not scrape them
+kubeEtcd: {enabled: false}
+kubeControllerManager: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeProxy: {enabled: false}
+
+prometheus:
+  service:
+    type: ClusterIP                         # not public (no auth). Use: kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090
+  prometheusSpec:
+    replicas: 1
+    retention: 15d
+    retentionSize: 25GB
+    # pick up ALL ServiceMonitors / PodMonitors / PrometheusRules, not only the ones labelled for this Helm release
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    nodeSelector: {workload: platform}
+    resources:
+      requests: {cpu: 300m, memory: 1Gi}
+      limits:   {cpu: "1", memory: 2Gi}
+    storageSpec:                            # PVC on the gp3 StorageClass
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-delete
+          accessModes: [ReadWriteOnce]
+          resources: {requests: {storage: 30Gi}}
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector: {workload: platform}
+    resources:
+      requests: {cpu: 20m, memory: 64Mi}
+      limits:   {cpu: 100m, memory: 128Mi}
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-delete
+          accessModes: [ReadWriteOnce]
+          resources: {requests: {storage: 5Gi}}
+  # Add a real receiver (Slack / e-mail / PagerDuty) here - see docs/07.
+  config:
+    route:
+      receiver: "null"
+      group_by: [alertname, namespace]
+      routes:
+        - receiver: "null"
+          matchers: ['alertname = "Watchdog"']
+    receivers:
+      - name: "null"
+
+kube-state-metrics:
+  nodeSelector: {workload: platform}
+prometheusOperator:
+  nodeSelector: {workload: platform}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits:   {cpu: 200m, memory: 256Mi}
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists                      # also run on the tainted data node
+
+grafana:
+  nodeSelector: {workload: platform}
+  admin:
+    existingSecret: grafana-admin           # SealedSecret -> Secret (platform/base/secrets)
+    userKey: admin-user
+    passwordKey: admin-password
+  service:
+    type: LoadBalancer                      # internet-facing NLB
+    port: 80
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: external
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      # HTTPS (optional):
+      # service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:__AWS_REGION__:__AWS_ACCOUNT_ID__:certificate/XXXX
+      # service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "80"
+    loadBalancerSourceRanges: ["__ADMIN_CIDR__"]
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: gp3-delete
+    size: 5Gi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 300m, memory: 384Mi}
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard              # any ConfigMap with this label becomes a dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Jaeger
+      type: jaeger
+      uid: jaeger
+      access: proxy
+      url: http://jaeger-query.observability.svc.cluster.local:16686
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: istio
+          orgId: 1
+          folder: Istio
+          type: file
+          disableDeletion: false
+          options: {path: /var/lib/grafana/dashboards/istio}
+  dashboards:                               # downloaded from grafana.com at start-up
+    istio:
+      istio-mesh:      {gnetId: 7639,  revision: 220, datasource: Prometheus}
+      istio-service:   {gnetId: 7636,  revision: 220, datasource: Prometheus}
+      istio-workload:  {gnetId: 7630,  revision: 220, datasource: Prometheus}
+      istio-control-plane: {gnetId: 7645, revision: 220, datasource: Prometheus}

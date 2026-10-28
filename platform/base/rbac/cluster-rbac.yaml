@@ -1,0 +1,30 @@
+# Cluster-wide read-only role for the platform / SRE team (groups come from EKS access entries).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: platform-readonly}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, pods/log, services, endpoints, persistentvolumes, persistentvolumeclaims, events, configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [applications, appprojects]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: platform-readonly}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: platform-readonly}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: platform-viewers}

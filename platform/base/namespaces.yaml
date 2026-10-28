@@ -1,0 +1,18 @@
+# Platform namespaces (app namespaces cardsplit-dev/prod live in the app overlays).
+apiVersion: v1
+kind: Namespace
+metadata: {name: monitoring, labels: {purpose: observability}}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: logging, labels: {purpose: observability}}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: observability, labels: {purpose: tracing}}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels: {purpose: service-mesh}

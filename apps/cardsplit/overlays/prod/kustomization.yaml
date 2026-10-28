@@ -1,0 +1,28 @@
+# PROD overlay: 2+ replicas (HPA 2-6), 20Gi retained volume.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cardsplit-prod
+resources:
+  - ../../base
+  - namespace.yaml
+  - secret.yaml
+  - authorization-policies.yaml
+images:
+  - name: cardsplit/frontend
+    newName: __AWS_ACCOUNT_ID__.dkr.ecr.__AWS_REGION__.amazonaws.com/cardsplit/frontend
+    newTag: "0.0.0"
+  - name: cardsplit/backend
+    newName: __AWS_ACCOUNT_ID__.dkr.ecr.__AWS_REGION__.amazonaws.com/cardsplit/backend
+    newTag: "0.0.0"
+  - name: cardsplit/database
+    newName: __AWS_ACCOUNT_ID__.dkr.ecr.__AWS_REGION__.amazonaws.com/cardsplit/database
+    newTag: "0.0.0"
+patches:
+  - target: {kind: StatefulSet, name: database}
+    patch: |-
+      - {op: replace, path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage, value: 20Gi}
+  - target: {kind: Ingress, name: frontend}
+    patch: |-
+      - op: add
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1tags
+        value: Environment=prod,Project=cardsplit

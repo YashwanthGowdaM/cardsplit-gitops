@@ -1,0 +1,35 @@
+# =============================================================================
+# Kiali (kiali-server chart): service-mesh topology, traffic, health, config validation.
+# Login: token  ->  kubectl -n istio-system create token kiali
+# =============================================================================
+auth:
+  strategy: token
+deployment:
+  replicas: 1
+  service_type: LoadBalancer
+  service_annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/load-balancer-source-ranges: "__ADMIN_CIDR__"
+  node_selector:
+    workload: platform
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}
+istio_namespace: istio-system
+external_services:
+  prometheus:
+    url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  grafana:
+    enabled: true
+    internal_url: http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80
+    # external_url: http://<grafana-lb-hostname>        # optional: gives Kiali "open in Grafana" links
+  tracing:
+    enabled: true
+    provider: jaeger
+    internal_url: http://jaeger-query.observability.svc.cluster.local:16686
+    use_grpc: false
+    # external_url: http://<jaeger-lb-hostname>:16686   # optional: links from Kiali to Jaeger UI
+server:
+  web_root: /

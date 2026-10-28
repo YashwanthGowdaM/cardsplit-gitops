@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cardsplit-prod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: cardsplit
+  source:
+    repoURL: __GIT_REPO_URL__
+    targetRevision: main
+    path: apps/cardsplit/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cardsplit-prod
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions:
+      - CreateNamespace=false
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff: {duration: 30s, factor: 2, maxDuration: 5m}
+  ignoreDifferences:                  # the HPA owns the replica count, not Git
+    - {group: apps, kind: Deployment, jsonPointers: [/spec/replicas]}

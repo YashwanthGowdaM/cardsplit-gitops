@@ -1,0 +1,56 @@
+# HorizontalPodAutoscalers (needs metrics-server). ContainerResource metrics
+# look only at the app container, so the Istio sidecar does not skew scaling.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  labels: {app: backend, app.kubernetes.io/part-of: cardsplit}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: backend}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: backend
+        target: {type: Utilization, averageUtilization: 70}
+    - type: ContainerResource
+      containerResource:
+        name: memory
+        container: backend
+        target: {type: Utilization, averageUtilization: 80}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Pods, value: 2, periodSeconds: 60}
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend
+  labels: {app: frontend, app.kubernetes.io/part-of: cardsplit}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: frontend
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Pods, value: 2, periodSeconds: 60}
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}

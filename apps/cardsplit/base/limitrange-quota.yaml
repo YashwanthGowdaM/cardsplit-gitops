@@ -1,0 +1,24 @@
+# Namespace guard-rails: defaults for containers that forget requests/limits,
+# and a ceiling for the whole namespace.
+apiVersion: v1
+kind: LimitRange
+metadata: {name: default-limits}
+spec:
+  limits:
+    - type: Container
+      defaultRequest: {cpu: 50m, memory: 64Mi}
+      default:        {cpu: 500m, memory: 256Mi}
+      max:            {cpu: "2", memory: 2Gi}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: namespace-quota}
+spec:
+  hard:
+    requests.cpu: "6"
+    requests.memory: 12Gi
+    limits.cpu: "12"
+    limits.memory: 24Gi
+    pods: "40"
+    persistentvolumeclaims: "4"
+    services.loadbalancers: "0"     # nothing in the app namespace may create its own LB

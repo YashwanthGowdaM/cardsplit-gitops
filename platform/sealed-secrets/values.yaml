@@ -1,0 +1,5 @@
+# Sealed Secrets controller (kubeseal expects this name/namespace by default).
+fullnameOverride: sealed-secrets-controller
+resources:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits:   {cpu: 100m, memory: 128Mi}

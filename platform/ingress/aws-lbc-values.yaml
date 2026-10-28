@@ -1,0 +1,14 @@
+# AWS Load Balancer Controller: turns Ingress -> ALB and Service type LoadBalancer -> NLB.
+clusterName: __CLUSTER_NAME__
+region: __AWS_REGION__
+serviceAccount:
+  create: false                         # created by eksctl with the IRSA role
+  name: aws-load-balancer-controller
+replicaCount: 2
+createIngressClassResource: true
+ingressClass: alb
+resources:
+  requests: {cpu: 50m, memory: 100Mi}
+  limits:   {cpu: 200m, memory: 256Mi}
+nodeSelector:
+  workload: platform

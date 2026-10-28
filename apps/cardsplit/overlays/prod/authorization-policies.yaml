@@ -1,0 +1,25 @@
+# Zero-trust inside the mesh: only the frontend may call the backend and only the
+# backend may call the database (identity = Kubernetes ServiceAccount via mTLS).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: {name: backend-allow-frontend}
+spec:
+  selector: {matchLabels: {app: backend}}
+  action: ALLOW
+  rules:
+    - from:
+        - source: {principals: ["cluster.local/ns/cardsplit-prod/sa/frontend"]}
+      to:
+        - operation: {ports: ["5000"]}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: {name: database-allow-backend}
+spec:
+  selector: {matchLabels: {app: database}}
+  action: ALLOW
+  rules:
+    - from:
+        - source: {principals: ["cluster.local/ns/cardsplit-prod/sa/backend"]}
+      to:
+        - operation: {ports: ["5432"]}
